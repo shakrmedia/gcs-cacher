@@ -155,7 +155,7 @@ func (c *Cacher) Save(ctx context.Context, i *SaveRequest) (retErr error) {
 			return err
 		}
 
-		if !f.Mode().IsRegular() {
+		if !f.Mode().IsRegular() && !(f.Mode()&os.ModeSymlink == os.ModeSymlink) {
 			c.log("file %s is not regular", name)
 			return nil
 		}
