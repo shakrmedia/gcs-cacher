@@ -1,6 +1,11 @@
 name: Build
 
-on: [push]
+on:
+  push:
+    branches:
+      - '**'
+    tag:
+      - '**'
 
 jobs:
   build:
@@ -8,8 +13,15 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - run: go build
+      - run: |
+          tar -czvf gcs-cacher_${{ github.ref_name }}_linux_amd64.tgz
+          sha256sum gcs-cacher_${{ github.ref_name }}_linux_amd64.tgz > gcs-cacher_${{ github.ref_name }}_SHA256SUMS
       - uses: actions/upload-artifact@v2
         with:
-          name: gcs-cacher
-          path: ./gcs-cacher
+          name: gcs-cacher_${{ github.ref_name }}_linux_amd64.tgz
+          path: ./gcs-cacher_${{ github.ref_name }}_linux_amd64.tgz
+      - uses: actions/upload-artifact@v2
+        with:
+          name: gcs-cacher_${{ github.ref_name }}_SHA256SUMS
+          path: ./gcs-cacher_${{ github.ref_name }}_SHA256SUMS
 
