@@ -5,6 +5,7 @@ go 1.15
 require (
 	cloud.google.com/go v0.65.0 // indirect
 	cloud.google.com/go/storage v1.11.0
+	github.com/mholt/archiver/v4 v4.0.0-alpha.1 // indirect
 	github.com/sethvargo/go-signalcontext v0.1.0
 	golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9
 	golang.org/x/sys v0.0.0-20200828081204-131dc92a58d5 // indirect

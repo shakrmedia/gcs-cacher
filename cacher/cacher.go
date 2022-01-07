@@ -4,7 +4,6 @@ package cacher
 
 import (
 	"archive/tar"
-	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -13,7 +12,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
+	"runtime"
+
+	"github.com/mholt/archiver/v4"
 
 	"cloud.google.com/go/storage"
 	"golang.org/x/crypto/blake2b"
@@ -22,8 +23,8 @@ import (
 )
 
 const (
-	contentType  = "application/gzip"
-	cacheControl = "public,max-age=3600"
+	contentType  = "application/x-zstd-compressed-tar"
+	cacheControl = "public,max-age=600"
 )
 
 // Cacher is responsible for saving and restoring caches.
@@ -121,95 +122,22 @@ func (c *Cacher) Save(ctx context.Context, i *SaveRequest) (retErr error) {
 		fmt.Printf("uploaded %d bytes\n", soFar)
 	}
 
-	// Create the gzip writer
-	gzw := gzip.NewWriter(gcsw)
-	defer func() {
-		c.log("closing gzip writer")
-		if cerr := gzw.Close(); cerr != nil {
-			if retErr != nil {
-				retErr = fmt.Errorf("%v: failed to close gzip writer: %w", retErr, cerr)
-				return
-			}
-			retErr = fmt.Errorf("failed to close gzip writer: %w", cerr)
-		}
-	}()
+	// Create the tar.zst writer
+	files, err := archiver.FilesFromDisk(map[string]string{
+		dir: "",
+	})
+	if err != nil {
+		return err
+	}
 
-	// Create the tar writer
-	tw := tar.NewWriter(gzw)
-	defer func() {
-		c.log("closing tar writer")
-		if cerr := tw.Close(); cerr != nil {
-			if retErr != nil {
-				retErr = fmt.Errorf("%v: failed to close tar writer: %w", retErr, cerr)
-				return
-			}
-			retErr = fmt.Errorf("failed to close tar writer: %w", cerr)
-		}
-	}()
+	format := archiver.CompressedArchive{
+		Compression: archiver.Zstd{},
+		Archival:    archiver.Tar{},
+	}
 
-	// Walk all files create tar
-	if err := filepath.Walk(dir, func(name string, f os.FileInfo, err error) error {
-		c.log("walking file %s", name)
-
-		if err != nil {
-			return err
-		}
-
-		if !f.Mode().IsRegular() {
-			c.log("file %s is not regular", name)
-			return nil
-		}
-
-		var link string
-		if f.Mode()&os.ModeSymlink == os.ModeSymlink {
-			if link, err = os.Readlink(name); err != nil {
-				return fmt.Errorf("failed to process symlink for %s: %w", name, err)
-			}
-		}
-
-		// Create the tar header
-		header, err := tar.FileInfoHeader(f, link)
-		if err != nil {
-			return fmt.Errorf("failed to create tar header for %s: %w", f.Name(), err)
-		}
-		header.Name = strings.TrimPrefix(strings.Replace(name, dir, "", -1), string(filepath.Separator))
-
-		// Write header to tar
-		c.log("writing tar header for %s", name)
-		if err := tw.WriteHeader(header); err != nil {
-			return fmt.Errorf("failed to write tar header for %s: %w", f.Name(), err)
-		}
-
-		// For symlink, no need to copy the actual content
-		if !f.Mode().IsRegular() {
-			return nil
-		}
-
-		// Open and write file to tar
-		c.log("opening %s", name)
-		file, err := os.Open(name)
-		if err != nil {
-			return fmt.Errorf("failed to open %s: %w", f.Name(), err)
-		}
-
-		c.log("copying %s to tar", name)
-		if _, err := io.Copy(tw, file); err != nil {
-			if cerr := file.Close(); cerr != nil {
-				return fmt.Errorf("failed to close %s: %v: failed to write tar: %w", f.Name(), cerr, err)
-			}
-			return fmt.Errorf("failed to write tar for %s: %w", f.Name(), err)
-		}
-
-		// Close tar
-		c.log("closing %s", name)
-		if err := file.Close(); err != nil {
-			return fmt.Errorf("failed to close: %w", err)
-		}
-
-		return nil
-	}); err != nil {
-		retErr = fmt.Errorf("failed to walk files: %w", err)
-		return
+	err = format.Archive(ctx, gcsw, files)
+	if err != nil {
+		return err
 	}
 
 	return
@@ -315,105 +243,86 @@ func (c *Cacher) Restore(ctx context.Context, i *RestoreRequest) (retErr error) 
 		}
 	}()
 
-	// Create the gzip reader
-	gzr, err := gzip.NewReader(gcsr)
-	if err != nil {
-		retErr = fmt.Errorf("failed to create gzip reader: %w", err)
-		return
+	format := archiver.CompressedArchive{
+		Compression: archiver.Zstd{},
+		Archival:    archiver.Tar{},
 	}
-	defer func() {
-		c.log("closing gzip reader")
-		if cerr := gzr.Close(); cerr != nil {
-			if retErr != nil {
-				retErr = fmt.Errorf("%v: failed to close gzip reader: %w", retErr, cerr)
-				return
-			}
-			retErr = fmt.Errorf("failed to close gzip reader: %w", cerr)
+	fileList := []string(nil)
+
+	handler := func(ctx context.Context, f archiver.File) error {
+		hdr, ok := f.Header.(*tar.Header)
+
+		if !ok {
+			return nil
 		}
-	}()
 
-	// Create the tar reader
-	tr := tar.NewReader(gzr)
+		fmt.Fprintf(os.Stdout, f.NameInArchive)
+		fmt.Fprintf(os.Stdout, "\n")
+		var fpath = filepath.Join(dir, f.NameInArchive)
+		fmt.Fprintf(os.Stdout, fpath)
+		fmt.Fprintf(os.Stdout, "\n")
 
-	// Unzip and untar each file into the target directory
-	if err := func() error {
-		for {
-			header, err := tr.Next()
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(fpath, 0755); err != nil {
+				return fmt.Errorf("failed to make directory %s: %w", fpath, err)
+			}
+			return nil
+
+		case tar.TypeReg, tar.TypeRegA, tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
+			if err := os.MkdirAll(filepath.Dir(fpath), 0755); err != nil {
+				return fmt.Errorf("failed to make directory %s: %w", filepath.Dir(fpath), err)
+			}
+
+			out, err := os.Create(fpath)
 			if err != nil {
-				if err == io.EOF {
-					// No more files
-					return nil
-				}
+				return fmt.Errorf("%s: creating new file: %v", fpath, err)
+			}
+			defer out.Close()
 
-				return fmt.Errorf("failed to read header: %w", err)
+			err = out.Chmod(f.Mode())
+			if err != nil && runtime.GOOS != "windows" {
+				return fmt.Errorf("%s: changing file mode: %v", fpath, err)
 			}
 
-			// Not entirely sure how this happens? I think it was because I uploaded a
-			// bad tarball. Nonetheless, we shall check.
-			if header == nil {
-				c.log("header is nil")
-				continue
+			in, err := f.Open()
+
+			_, err = io.Copy(out, in)
+			if err != nil {
+				return fmt.Errorf("%s: writing file: %v", fpath, err)
+			}
+			return nil
+
+		case tar.TypeSymlink:
+			if err := os.MkdirAll(filepath.Dir(fpath), 0755); err != nil {
+				return fmt.Errorf("failed to make directory %s: %w", filepath.Dir(fpath), err)
 			}
 
-			target := filepath.Join(dir, header.Name)
-			c.log("working on %s", target)
-
-			switch header.Typeflag {
-			case tar.TypeDir:
-				c.log("creating directory %s", target)
-
-				if err := os.MkdirAll(target, 0755); err != nil {
-					return fmt.Errorf("failed to make directory %s: %w", target, err)
-				}
-			case tar.TypeSymlink:
-				c.log("creating symlink %s", target)
-
-				// Create the parent directory in case it does not exist...
-				parent := filepath.Dir(target)
-				if err := os.MkdirAll(parent, 0755); err != nil {
-					return fmt.Errorf("failed to make parent directory %s: %w", parent, err)
-				}
-
-				c.log("symlink %s to disk", target)
-				if err := os.Symlink(header.Linkname, target); err != nil {
-					return fmt.Errorf("failed to symlink %s: %w", target, err)
-				}
-			case tar.TypeReg:
-				c.log("creating file %s", target)
-
-				// Create the parent directory in case it does not exist...
-				parent := filepath.Dir(target)
-				if err := os.MkdirAll(parent, 0755); err != nil {
-					return fmt.Errorf("failed to make parent directory %s: %w", parent, err)
-				}
-
-				c.log("opening %s", target)
-				f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, os.FileMode(header.Mode))
-				if err != nil {
-					return fmt.Errorf("failed to open %s: %w", target, err)
-				}
-
-				c.log("copying %s to disk", target)
-				if _, err := io.Copy(f, tr); err != nil {
-					if cerr := f.Close(); cerr != nil {
-						return fmt.Errorf("failed to close %s: %v: failed to untar: %w", target, cerr, err)
-					}
-					return fmt.Errorf("failed to untar %s: %w", target, err)
-				}
-
-				// Close f here instead of deferring
-				c.log("closing %s", target)
-				if err := f.Close(); err != nil {
-					return fmt.Errorf("failed to close %s: %w", target, err)
-				}
-			default:
-				return fmt.Errorf("unknown header type %v for %s", header.Typeflag, target)
+			err = os.Symlink(hdr.Linkname, fpath)
+			if err != nil {
+				return fmt.Errorf("%s: making symbolic link for: %v", fpath, err)
 			}
+			return nil
+
+		case tar.TypeLink:
+			if err := os.MkdirAll(filepath.Dir(fpath), 0755); err != nil {
+				return fmt.Errorf("failed to make directory %s: %w", filepath.Dir(fpath), err)
+			}
+
+			err = os.Link(filepath.Join(fpath, hdr.Linkname), fpath)
+			if err != nil {
+				return fmt.Errorf("%s: making symbolic link for: %v", fpath, err)
+			}
+			return nil
+
+		case tar.TypeXGlobalHeader:
+			return nil // ignore the pax global header from git-generated tarballs
+		default:
+			return fmt.Errorf("%s: unknown type flag: %c", hdr.Name, hdr.Typeflag)
 		}
-	}(); err != nil {
-		retErr = fmt.Errorf("failed to download file: %w", err)
-		return
 	}
+
+	format.Extract(ctx, gcsr, fileList, handler)
 
 	return
 }
