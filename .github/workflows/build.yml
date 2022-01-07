@@ -13,14 +13,17 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - run: go build
-      - run: |
+      - if: startsWith(github.ref, 'refs/tags/v')
+        run: |
           tar -czvf gcs-cacher_${{ github.ref_name }}_linux_amd64.tgz gcs-cacher
           sha256sum gcs-cacher_${{ github.ref_name }}_linux_amd64.tgz > gcs-cacher_${{ github.ref_name }}_SHA256SUMS
-      - uses: actions/upload-artifact@v2
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v2
         with:
           name: gcs-cacher_${{ github.ref_name }}_linux_amd64.tgz
           path: ./gcs-cacher_${{ github.ref_name }}_linux_amd64.tgz
-      - uses: actions/upload-artifact@v2
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v2
         with:
           name: gcs-cacher_${{ github.ref_name }}_SHA256SUMS
           path: ./gcs-cacher_${{ github.ref_name }}_SHA256SUMS
