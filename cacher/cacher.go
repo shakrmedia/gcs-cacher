@@ -155,13 +155,20 @@ func (c *Cacher) Save(ctx context.Context, i *SaveRequest) (retErr error) {
 			return err
 		}
 
-		if !f.Mode().IsRegular() && !(f.Mode()&os.ModeSymlink == os.ModeSymlink) {
+		if !f.Mode().IsRegular() {
 			c.log("file %s is not regular", name)
 			return nil
 		}
 
+		var link string
+		if f.Mode()&os.ModeSymlink == os.ModeSymlink {
+			if link, err = os.Readlink(name); err != nil {
+				return fmt.Errorf("failed to process symlink for %s: %w", name, err)
+			}
+		}
+
 		// Create the tar header
-		header, err := tar.FileInfoHeader(f, f.Name())
+		header, err := tar.FileInfoHeader(f, link)
 		if err != nil {
 			return fmt.Errorf("failed to create tar header for %s: %w", f.Name(), err)
 		}
@@ -171,6 +178,11 @@ func (c *Cacher) Save(ctx context.Context, i *SaveRequest) (retErr error) {
 		c.log("writing tar header for %s", name)
 		if err := tw.WriteHeader(header); err != nil {
 			return fmt.Errorf("failed to write tar header for %s: %w", f.Name(), err)
+		}
+
+		// For symlink, no need to copy the actual content
+		if !f.Mode().IsRegular() {
+			return nil
 		}
 
 		// Open and write file to tar
