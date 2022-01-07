@@ -256,11 +256,7 @@ func (c *Cacher) Restore(ctx context.Context, i *RestoreRequest) (retErr error) 
 			return nil
 		}
 
-		fmt.Fprintf(os.Stdout, f.NameInArchive)
-		fmt.Fprintf(os.Stdout, "\n")
 		var fpath = filepath.Join(dir, f.NameInArchive)
-		fmt.Fprintf(os.Stdout, fpath)
-		fmt.Fprintf(os.Stdout, "\n")
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
