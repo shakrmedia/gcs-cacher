@@ -365,6 +365,19 @@ func (c *Cacher) Restore(ctx context.Context, i *RestoreRequest) (retErr error) 
 				if err := os.MkdirAll(target, 0755); err != nil {
 					return fmt.Errorf("failed to make directory %s: %w", target, err)
 				}
+			case tar.TypeSymlink:
+				c.log("creating symlink %s", target)
+
+				// Create the parent directory in case it does not exist...
+				parent := filepath.Dir(target)
+				if err := os.MkdirAll(parent, 0755); err != nil {
+					return fmt.Errorf("failed to make parent directory %s: %w", parent, err)
+				}
+
+				c.log("symlink %s to disk", target)
+				if err := os.Symlink(header.Linkname, target); err != nil {
+					return fmt.Errorf("failed to symlink %s: %w", target, err)
+				}
 			case tar.TypeReg:
 				c.log("creating file %s", target)
 
