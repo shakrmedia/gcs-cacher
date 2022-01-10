@@ -1,5 +1,15 @@
 # GCS Cacher
 
+Note: This is a fork of the [original gcs-cacher repository](https://github.com/sethvargo/gcs-cacher). Here are some notable changes:
+
+- Preserve symbolic link and hard link inside an archive
+- Use [archiver](https://github.com/mholt/archiver) library instead of manually creating tar.gz files
+- Compress using tar.zst instead of tar.gz for better performance and compression rate
+
+All usages are same as the original tool. To use this tool on Shakr repo's GitHub Actions workflow, refer to the actions runner repository.
+
+---
+
 [![GoDoc](https://img.shields.io/badge/go-documentation-blue.svg?style=flat-square)](https://pkg.go.dev/mod/github.com/sethvargo/gcs-cacher)
 [![GitHub Actions](https://img.shields.io/github/workflow/status/sethvargo/gcs-cacher/Test?style=flat-square)](https://github.com/sethvargo/gcs-cacher/actions?query=workflow%3ATest)
 
