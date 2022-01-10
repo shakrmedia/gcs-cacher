@@ -282,7 +282,7 @@ func (c *Cacher) Restore(ctx context.Context, i *RestoreRequest) (retErr error) 
 			}
 
 			in, err := f.Open()
-	  		if err != nil {
+			if err != nil {
 				return fmt.Errorf("%s: opening file: %v", fpath, err)
 			}
 
