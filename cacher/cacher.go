@@ -123,7 +123,7 @@ func (c *Cacher) Save(ctx context.Context, i *SaveRequest) (retErr error) {
 	}
 
 	// Create the tar.zst writer
-	files, err := archiver.FilesFromDisk(map[string]string{
+	files, err := archiver.FilesFromDisk(nil, map[string]string{
 		dir: "",
 	})
 	if err != nil {
